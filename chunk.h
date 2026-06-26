@@ -6,22 +6,22 @@
 #include <stdint.h>
 
 typedef enum {
-  OP_RETURN,
-  OP_CONSTANTS,
+    OP_RETURN,
+    OP_CONSTANT,
 } OpCode;
 
 typedef struct {
-  int count;
-  int capacity;
-  uint8_t *code;
-  int *lines;
-  ValueArray constants;
+    int count;
+    int capacity;
+    uint8_t *code;
+    int *lines;
+    ValueArray constants;
 } Chunk;
 
 void initChunk(Chunk *chunk);
 void freeChunk(Chunk *chunk);
 void writeChunk(Chunk *chunk, uint8_t byte, int line);
 
-int addConstants(Chunk *chunk, Value value);
+int addConstant(Chunk *chunk, Value value);
 
 #endif
