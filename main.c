@@ -8,8 +8,10 @@ int main(int argc, const char *argv[]) {
   initChunk(&chunk);
 
   int constants = addConstants(&chunk, 1.2);
-  writeChunk(&chunk, OP_RETURN);
-  writeChunk(&chunk, constants);
+  writeChunk(&chunk, OP_CONSTANTS, 123);
+  writeChunk(&chunk, constants, 123);
+
+  writeChunk(&chunk, OP_RETURN, 123);
 
   disassembleChunk(&chunk, "test chunk");
 
