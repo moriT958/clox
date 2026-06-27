@@ -40,6 +40,10 @@ static InterpretResult run() {
 #endif
 	uint8_t instruction;
 	switch (instruction = READ_BYTE()) {
+	case OP_NAGATE: {
+	    push(-pop());
+	    break;
+	}
 	case OP_CONSTANT: {
 	    Value constant = READ_CONSTANT();
 	    push(constant);

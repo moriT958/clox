@@ -1,10 +1,11 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -g
+CFLAGS = -Wall -Wextra -std=c11 -g -MMD -MP
 
 BUILD_DIR = build
 TARGET = clox
 SRCS = $(wildcard *.c)
 OBJS = $(patsubst %.c, $(BUILD_DIR)/%.o, $(SRCS))
+DEPS = $(OBJS:.o=.d)
 
 .PHONY: all run clean
 
@@ -18,6 +19,8 @@ $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+-include $(DEPS)
 
 run: $(TARGET)
 	./$(TARGET)
