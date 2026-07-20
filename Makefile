@@ -7,9 +7,12 @@ SRCS = $(wildcard *.c)
 OBJS = $(patsubst %.c, $(BUILD_DIR)/%.o, $(SRCS))
 DEPS = $(OBJS:.o=.d)
 
-.PHONY: all run clean
+.PHONY: all debug run clean
 
 all: $(TARGET)
+
+debug: clean
+	$(MAKE) CFLAGS="$(CFLAGS) -O0 -fsanitize=address,undefined" $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
