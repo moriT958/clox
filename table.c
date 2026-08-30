@@ -16,9 +16,20 @@ void freeTable(Table *table) {
 
 static Entry *findEntry(Entry *entries, int capacity, ObjString *key) {
     uint32_t index = key->hash % capacity;
+    Entry *tombstone = NULL;
+
     for (;;) {
 	Entry *entry = &entries[index];
-	if (entry->key == key || entry->key == NULL) {
+	if (entry->key == NULL) {
+	    if (IS_NIL(entry->value)) {
+		// 未使用の空きスロット
+		return tombstone != NULL ? tombstone : entry;
+	    } else {
+		// tombstone (削除済み) スロット。覚えておいて探索は続ける
+		if (tombstone == NULL)
+		    tombstone = entry;
+	    }
+	} else if (entry->key == key) {
 	    return entry;
 	}
 	index = (index + 1) % capacity;
@@ -37,6 +48,20 @@ bool tableGet(Table *table, ObjString *key, Value *value) {
     return true;
 }
 
+bool tableDelete(Table *table, ObjString *key) {
+    if (table->count == 0)
+	return false;
+
+    Entry *entry = findEntry(table->entries, table->capacity, key);
+    if (entry->key == NULL)
+	return false;
+
+    // tombstone を置く
+    entry->key = NULL;
+    entry->value = BOOL_VAL(true);
+    return true;
+}
+
 #define TABLE_MAX_LOAD 0.75
 
 static void adjustCapacity(Table *table, int capacity) {
@@ -46,6 +71,7 @@ static void adjustCapacity(Table *table, int capacity) {
 	entries[i].value = NIL_VAL;
     }
 
+    table->count = 0;
     for (int i = 0; i < table->capacity; i++) {
 	Entry *entry = &table->entries[i];
 	if (entry->key == NULL)
@@ -54,6 +80,7 @@ static void adjustCapacity(Table *table, int capacity) {
 	Entry *dest = findEntry(entries, capacity, entry->key);
 	dest->key = entry->key;
 	dest->value = entry->value;
+	table->count++;
     }
 
     FREE_ARRAY(Entry, table->entries, table->capacity);
@@ -69,7 +96,7 @@ bool tableSet(Table *table, ObjString *key, Value value) {
 
     Entry *entry = findEntry(table->entries, table->capacity, key);
     bool isNewKey = entry->key == NULL;
-    if (isNewKey)
+    if (isNewKey && IS_NIL(entry->value))
 	table->count++;
 
     entry->key = key;
