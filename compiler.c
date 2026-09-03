@@ -21,6 +21,17 @@ typedef struct {
     bool panicMode;
 } Parser;
 
+typedef struct {
+    Token name;
+    int depth;
+} Local;
+
+typedef struct {
+    Local locals[UINT8_COUNT];
+    int localCount;
+    int scopeDepth;
+} Compiler;
+
 typedef enum {
     PREC_NONE,
     PREC_ASSIGNMENT,
@@ -44,9 +55,16 @@ typedef struct {
 } ParseRule;
 
 Parser parser;
+Compiler *current;
 Chunk *compilingChunk;
 
 static Chunk *currentChunk() { return compilingChunk; }
+
+static void initCompiler(Compiler *compiler) {
+    compiler->localCount = 0;
+    compiler->scopeDepth = 0;
+    current = compiler;
+}
 
 static void errorAt(Token *token, const char *message) {
     if (parser.panicMode)
@@ -405,6 +423,8 @@ static void declaration() {
 
 bool compile(const char *source, Chunk *chunk) {
     initScanner(source);
+    Compiler compiler;
+    initCompiler(&compiler);
     compilingChunk = chunk;
 
     parser.hadError = false;
