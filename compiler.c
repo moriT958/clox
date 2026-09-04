@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "chunk.h"
 #include "common.h"
@@ -20,6 +21,20 @@ typedef struct {
     bool hadError;
     bool panicMode;
 } Parser;
+
+// 初期化式のコンパイル中であることを表す depth の値。
+#define UNINITIALIZED_DEPTH (-1)
+
+typedef struct {
+    Token name;
+    int depth;
+} Local;
+
+typedef struct {
+    Local locals[UINT8_COUNT];
+    int localCount;
+    int scopeDepth;
+} Compiler;
 
 typedef enum {
     PREC_NONE,
@@ -44,9 +59,16 @@ typedef struct {
 } ParseRule;
 
 Parser parser;
+Compiler *current;
 Chunk *compilingChunk;
 
 static Chunk *currentChunk() { return compilingChunk; }
+
+static void initCompiler(Compiler *compiler) {
+    compiler->localCount = 0;
+    compiler->scopeDepth = 0;
+    current = compiler;
+}
 
 static void errorAt(Token *token, const char *message) {
     if (parser.panicMode)
@@ -120,9 +142,11 @@ static void emitConstant(Value value) {
 }
 
 static void expression();
+static void declaration();
 static ParseRule *getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
 static uint8_t identifierConstant(Token *name);
+static int resolveLocal(Compiler *compiler, Token *name);
 static bool match(TokenType type);
 
 static void parsePrecedence(Precedence precedence) {
@@ -237,17 +261,31 @@ static void string(bool canAssign) {
 }
 
 static void namedVariable(Token name, bool canAssign) {
-    uint8_t arg = identifierConstant(&name);
+    uint8_t getOp, setOp;
+    int arg = resolveLocal(current, &name);
+
+    if (arg != -1) {
+	// ローカル変数はスタックスロット番号で参照する。
+	getOp = OP_GET_LOCAL;
+	setOp = OP_SET_LOCAL;
+    } else {
+	// 見つからなければグローバル変数として名前で参照する。
+	arg = identifierConstant(&name);
+	getOp = OP_GET_GLOBAL;
+	setOp = OP_SET_GLOBAL;
+    }
 
     if (canAssign && match(TOKEN_EQUAL)) {
 	expression();
-	emitBytes(OP_SET_GLOBAL, arg);
+	emitBytes(setOp, (uint8_t)arg);
     } else {
-	emitBytes(OP_GET_GLOBAL, arg);
+	emitBytes(getOp, (uint8_t)arg);
     }
 }
 
-static void variable(bool canAssign) { namedVariable(parser.previous, canAssign); }
+static void variable(bool canAssign) {
+    namedVariable(parser.previous, canAssign);
+}
 
 static void unary(bool canAssign) {
     (void)canAssign;
@@ -350,13 +388,108 @@ static uint8_t identifierConstant(Token *name) {
     return makeConstant(OBJ_VAL(copyString(name->start, name->length)));
 }
 
+static bool identifiersEqual(Token *a, Token *b) {
+    if (a->length != b->length)
+	return false;
+
+    return memcmp(a->start, b->start, a->length) == 0;
+}
+
+static int resolveLocal(Compiler *compiler, Token *name) {
+    // 内側のスコープの変数が外側の同名変数を隠すよう、末尾から探す。
+    for (int i = compiler->localCount - 1; i >= 0; i--) {
+	Local *local = &compiler->locals[i];
+	if (identifiersEqual(name, &local->name)) {
+	    if (local->depth == UNINITIALIZED_DEPTH)
+		error("Can't read local variable in its own initializer.");
+	    return i;
+	}
+    }
+
+    return -1;
+}
+
+static void addLocal(Token name) {
+    if (current->localCount == UINT8_COUNT) {
+	error("Too many local variables in function.");
+	return;
+    }
+
+    Local *local = &current->locals[current->localCount++];
+    local->name = name;
+    // 初期化式のコンパイル中は未初期化として扱い、自分自身の参照を検出する。
+    local->depth = UNINITIALIZED_DEPTH;
+}
+
+static void markInitialized() {
+    current->locals[current->localCount - 1].depth = current->scopeDepth;
+}
+
+static void declareVariable() {
+    // グローバル変数は実行時にハッシュテーブルへ名前で登録するため
+    // コンパイラの locals に追加する必要がないので何もしない。
+    if (current->scopeDepth == 0)
+	return;
+
+    Token *name = &parser.previous;
+
+    // 同じスコープの変数は locals の末尾に並んでいるため後ろから走査する。
+    // 現在見ている変数のスコープが、コンパイラが見ているスコープより
+    // 浅くなったところで検索を打ち切る。(スコープ外の変数に到達したところ)
+    for (int i = current->localCount - 1; i >= 0; i--) {
+	Local *local = &current->locals[i];
+	if (local->depth != UNINITIALIZED_DEPTH &&
+	    local->depth < current->scopeDepth)
+	    break;
+
+	if (identifiersEqual(name, &local->name))
+	    error("Already a variable with this name in this scope.");
+    }
+
+    addLocal(*name);
+}
+
 static uint8_t parseVariable(const char *errorMessage) {
     consume(TOKEN_IDENTIFIER, errorMessage);
+
+    declareVariable();
+    // ローカル変数は定数表に追加する必要がないためここで早期リターンする
+    if (current->scopeDepth > 0)
+	return 0;
+
     return identifierConstant(&parser.previous);
 }
 
 static void defineVariable(uint8_t global) {
+    // ローカル変数がグローバル変数としてスタックに追加されないようにするため
+    if (current->scopeDepth > 0) {
+	// 初期化式のコンパイルが終わったので、参照可能な状態にする。
+	markInitialized();
+	return;
+    }
+
     emitBytes(OP_DEFINE_GLOBAL, global);
+}
+
+static void beginScope() { current->scopeDepth++; }
+
+static void endScope() {
+    current->scopeDepth--;
+
+    while (current->localCount > 0 &&
+           current->locals[current->localCount - 1].depth >
+               current->scopeDepth) {
+	emitByte(OP_POP);
+	current->localCount--;
+    }
+}
+
+static void block() {
+    while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+	declaration();
+    }
+
+    consume(TOKEN_RIGHT_BRACE, "Expect '}' after block.");
 }
 
 static void printStatement() {
@@ -374,6 +507,10 @@ static void expressionStatement() {
 static void statement() {
     if (match(TOKEN_PRINT)) {
 	printStatement();
+    } else if (match(TOKEN_LEFT_BRACE)) {
+	beginScope();
+	block();
+	endScope();
     } else {
 	expressionStatement();
     }
@@ -405,6 +542,8 @@ static void declaration() {
 
 bool compile(const char *source, Chunk *chunk) {
     initScanner(source);
+    Compiler compiler;
+    initCompiler(&compiler);
     compilingChunk = chunk;
 
     parser.hadError = false;
