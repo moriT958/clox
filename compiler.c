@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "chunk.h"
 #include "common.h"
@@ -142,6 +143,7 @@ static void declaration();
 static ParseRule *getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
 static uint8_t identifierConstant(Token *name);
+static int resolveLocal(Compiler *compiler, Token *name);
 static bool match(TokenType type);
 
 static void parsePrecedence(Precedence precedence) {
@@ -256,13 +258,25 @@ static void string(bool canAssign) {
 }
 
 static void namedVariable(Token name, bool canAssign) {
-    uint8_t arg = identifierConstant(&name);
+    uint8_t getOp, setOp;
+    int arg = resolveLocal(current, &name);
+
+    if (arg != -1) {
+	// ローカル変数はスタックスロット番号で参照する。
+	getOp = OP_GET_LOCAL;
+	setOp = OP_SET_LOCAL;
+    } else {
+	// 見つからなければグローバル変数として名前で参照する。
+	arg = identifierConstant(&name);
+	getOp = OP_GET_GLOBAL;
+	setOp = OP_SET_GLOBAL;
+    }
 
     if (canAssign && match(TOKEN_EQUAL)) {
 	expression();
-	emitBytes(OP_SET_GLOBAL, arg);
+	emitBytes(setOp, (uint8_t)arg);
     } else {
-	emitBytes(OP_GET_GLOBAL, arg);
+	emitBytes(getOp, (uint8_t)arg);
     }
 }
 
@@ -369,6 +383,24 @@ static void synchronize() {
 
 static uint8_t identifierConstant(Token *name) {
     return makeConstant(OBJ_VAL(copyString(name->start, name->length)));
+}
+
+static bool identifiersEqual(Token *a, Token *b) {
+    if (a->length != b->length)
+	return false;
+
+    return memcmp(a->start, b->start, a->length) == 0;
+}
+
+static int resolveLocal(Compiler *compiler, Token *name) {
+    // 内側のスコープの変数が外側の同名変数を隠すよう、末尾から探す。
+    for (int i = compiler->localCount - 1; i >= 0; i--) {
+	Local *local = &compiler->locals[i];
+	if (identifiersEqual(name, &local->name))
+	    return i;
+    }
+
+    return -1;
 }
 
 static void addLocal(Token name) {

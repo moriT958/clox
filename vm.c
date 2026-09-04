@@ -194,6 +194,19 @@ static InterpretResult run() {
 	    break;
 	}
 
+	case OP_GET_LOCAL: {
+	    uint8_t slot = READ_BYTE();
+	    push(vm.stack[slot]);
+	    break;
+	}
+
+	case OP_SET_LOCAL: {
+	    uint8_t slot = READ_BYTE();
+	    // 代入式の値は式の結果として残すため pop しない。
+	    vm.stack[slot] = peek(0);
+	    break;
+	}
+
 	case OP_RETURN:
 	    return INTERPRET_OK;
 
