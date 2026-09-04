@@ -266,7 +266,9 @@ static void namedVariable(Token name, bool canAssign) {
     }
 }
 
-static void variable(bool canAssign) { namedVariable(parser.previous, canAssign); }
+static void variable(bool canAssign) {
+    namedVariable(parser.previous, canAssign);
+}
 
 static void unary(bool canAssign) {
     (void)canAssign;
@@ -369,12 +371,42 @@ static uint8_t identifierConstant(Token *name) {
     return makeConstant(OBJ_VAL(copyString(name->start, name->length)));
 }
 
+static void addLocal(Token name) {
+    if (current->localCount == UINT8_COUNT) {
+	error("Too many local variables in function.");
+	return;
+    }
+
+    Local *local = &current->locals[current->localCount++];
+    local->name = name;
+    local->depth = current->scopeDepth;
+}
+
+static void declareVariable() {
+    // グローバル変数は実行時にハッシュテーブルへ名前で登録するため
+    // コンパイラの locals に追加する必要がないので何もしない。
+    if (current->scopeDepth == 0)
+	return;
+
+    addLocal(parser.previous);
+}
+
 static uint8_t parseVariable(const char *errorMessage) {
     consume(TOKEN_IDENTIFIER, errorMessage);
+
+    declareVariable();
+    // ローカル変数は定数表に追加する必要がないためここで早期リターンする
+    if (current->scopeDepth > 0)
+	return 0;
+
     return identifierConstant(&parser.previous);
 }
 
 static void defineVariable(uint8_t global) {
+    // ローカル変数がグローバル変数としてスタックに追加されないようにするため
+    if (current->scopeDepth > 0)
+	return;
+
     emitBytes(OP_DEFINE_GLOBAL, global);
 }
 
@@ -384,8 +416,8 @@ static void endScope() {
     current->scopeDepth--;
 
     while (current->localCount > 0 &&
-	   current->locals[current->localCount - 1].depth >
-	       current->scopeDepth) {
+           current->locals[current->localCount - 1].depth >
+               current->scopeDepth) {
 	emitByte(OP_POP);
 	current->localCount--;
     }
