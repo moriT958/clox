@@ -138,6 +138,7 @@ static void emitConstant(Value value) {
 }
 
 static void expression();
+static void declaration();
 static ParseRule *getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
 static uint8_t identifierConstant(Token *name);
@@ -377,6 +378,27 @@ static void defineVariable(uint8_t global) {
     emitBytes(OP_DEFINE_GLOBAL, global);
 }
 
+static void beginScope() { current->scopeDepth++; }
+
+static void endScope() {
+    current->scopeDepth--;
+
+    while (current->localCount > 0 &&
+	   current->locals[current->localCount - 1].depth >
+	       current->scopeDepth) {
+	emitByte(OP_POP);
+	current->localCount--;
+    }
+}
+
+static void block() {
+    while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+	declaration();
+    }
+
+    consume(TOKEN_RIGHT_BRACE, "Expect '}' after block.");
+}
+
 static void printStatement() {
     expression();
     consume(TOKEN_SEMICOLON, "Expect ';' after value.");
@@ -392,6 +414,10 @@ static void expressionStatement() {
 static void statement() {
     if (match(TOKEN_PRINT)) {
 	printStatement();
+    } else if (match(TOKEN_LEFT_BRACE)) {
+	beginScope();
+	block();
+	endScope();
     } else {
 	expressionStatement();
     }
