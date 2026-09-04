@@ -22,6 +22,9 @@ typedef struct {
     bool panicMode;
 } Parser;
 
+// 初期化式のコンパイル中であることを表す depth の値。
+#define UNINITIALIZED_DEPTH (-1)
+
 typedef struct {
     Token name;
     int depth;
@@ -396,8 +399,11 @@ static int resolveLocal(Compiler *compiler, Token *name) {
     // 内側のスコープの変数が外側の同名変数を隠すよう、末尾から探す。
     for (int i = compiler->localCount - 1; i >= 0; i--) {
 	Local *local = &compiler->locals[i];
-	if (identifiersEqual(name, &local->name))
+	if (identifiersEqual(name, &local->name)) {
+	    if (local->depth == UNINITIALIZED_DEPTH)
+		error("Can't read local variable in its own initializer.");
 	    return i;
+	}
     }
 
     return -1;
@@ -411,7 +417,12 @@ static void addLocal(Token name) {
 
     Local *local = &current->locals[current->localCount++];
     local->name = name;
-    local->depth = current->scopeDepth;
+    // 初期化式のコンパイル中は未初期化として扱い、自分自身の参照を検出する。
+    local->depth = UNINITIALIZED_DEPTH;
+}
+
+static void markInitialized() {
+    current->locals[current->localCount - 1].depth = current->scopeDepth;
 }
 
 static void declareVariable() {
@@ -436,8 +447,11 @@ static uint8_t parseVariable(const char *errorMessage) {
 
 static void defineVariable(uint8_t global) {
     // ローカル変数がグローバル変数としてスタックに追加されないようにするため
-    if (current->scopeDepth > 0)
+    if (current->scopeDepth > 0) {
+	// 初期化式のコンパイルが終わったので、参照可能な状態にする。
+	markInitialized();
 	return;
+    }
 
     emitBytes(OP_DEFINE_GLOBAL, global);
 }
