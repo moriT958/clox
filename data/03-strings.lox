@@ -1,0 +1,8 @@
+print "hello";                    // hello
+print "hello" + " " + "world";    // hello world
+print "ab" == "ab";               // true
+print "ab" == "ba";               // false
+
+var name = "Lox";
+var greeting = "Hello, " + name + "!";
+print greeting;                   // Hello, Lox!
