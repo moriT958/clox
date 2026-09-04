@@ -431,7 +431,22 @@ static void declareVariable() {
     if (current->scopeDepth == 0)
 	return;
 
-    addLocal(parser.previous);
+    Token *name = &parser.previous;
+
+    // 同じスコープの変数は locals の末尾に並んでいるため後ろから走査する。
+    // 現在見ている変数のスコープが、コンパイラが見ているスコープより
+    // 浅くなったところで検索を打ち切る。(スコープ外の変数に到達したところ)
+    for (int i = current->localCount - 1; i >= 0; i--) {
+	Local *local = &current->locals[i];
+	if (local->depth != UNINITIALIZED_DEPTH &&
+	    local->depth < current->scopeDepth)
+	    break;
+
+	if (identifiersEqual(name, &local->name))
+	    error("Already a variable with this name in this scope.");
+    }
+
+    addLocal(*name);
 }
 
 static uint8_t parseVariable(const char *errorMessage) {
