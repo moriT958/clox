@@ -173,6 +173,8 @@ static void emitConstant(Value value) {
 static void expression();
 static void statement();
 static void declaration();
+static void varDeclaration();
+static void expressionStatement();
 static ParseRule *getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
 static uint8_t identifierConstant(Token *name);
@@ -586,6 +588,53 @@ static void whileStatement() {
     emitByte(OP_POP);
 }
 
+static void forStatement() {
+    beginScope();
+    consume(TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
+
+    if (match(TOKEN_SEMICOLON)) {
+	// 初期化子なしなので何もしない
+    } else if (match(TOKEN_VAR)) {
+	varDeclaration();
+    } else {
+	expressionStatement();
+    }
+
+    int loopStart = currentChunk()->count;
+    int exitJump = -1;
+    if (!match(TOKEN_SEMICOLON)) {
+	expression();
+	consume(TOKEN_SEMICOLON, "Expect ';' after loop condition.");
+
+	// 条件が偽なら、本体と増分を飛び越えてループを終了する。
+	exitJump = emitJump(OP_JUMP_IF_FALSE);
+	emitByte(OP_POP);
+    }
+
+    if (!match(TOKEN_RIGHT_PAREN)) {
+	// 初回は本体へ進み、以降は増分から条件へ戻る。
+	int bodyJump = emitJump(OP_JUMP);
+	int incrementStart = currentChunk()->count;
+	expression();
+	emitByte(OP_POP);
+	consume(TOKEN_RIGHT_PAREN, "Expect ')' after for clauses.");
+
+	emitLoop(loopStart);
+	loopStart = incrementStart;
+	patchJump(bodyJump);
+    }
+
+    statement();
+	emitLoop(loopStart);
+
+    if (exitJump != -1) {
+	patchJump(exitJump);
+	emitByte(OP_POP);
+    }
+
+    endScope();
+}
+
 static void expressionStatement() {
     expression();
     consume(TOKEN_SEMICOLON, "Expect ';' after expression.");
@@ -597,8 +646,10 @@ static void statement() {
 	printStatement();
     } else if (match(TOKEN_IF)) {
 	ifStatement();
-	} else if (match(TOKEN_WHILE)) {
+    } else if (match(TOKEN_WHILE)) {
 	whileStatement();
+	} else if (match(TOKEN_FOR)) {
+	forStatement();
     } else if (match(TOKEN_LEFT_BRACE)) {
 	beginScope();
 	block();
