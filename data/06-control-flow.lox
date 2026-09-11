@@ -1,0 +1,25 @@
+// 論理演算子はオペランドを返し、短絡評価する。
+print false and "right"; // false (右辺は評価されない)
+print true or "right";   // true (右辺は評価されない)
+print true and "right";  // right
+print nil or "fallback"; // fallback
+
+// `and` は `or` よりも優先順位が高い。
+print true or false and false; // true
+
+var count = 0;
+while (count < 3) {
+    print count; // 0, 1, 2 と表示される
+    count = count + 1;
+}
+
+for (var i = 0; i < 3; i = i + 1) {
+    print i; // 0, 1, 2 と表示される
+}
+
+// 初期化子と増分式は省略できる。
+var j = 0;
+for (; j < 2;) {
+    print j; // 0, 1 と表示される
+    j = j + 1;
+}
