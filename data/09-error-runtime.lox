@@ -1,0 +1,6 @@
+print "before";   // before
+
+print "a" + 1;    // Operator must be two numbers or two strings.
+                  // [line 3] in script
+
+print "after";    // 到達しない

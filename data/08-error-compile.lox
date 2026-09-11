@@ -1,0 +1,10 @@
+print 1 +;        // Error at ';': Expect expression.
+print 2           // Error at 'var': Expect ';' after value.
+var 1 = 2;        // Error at '1': Expect variable name.
+1 + 2 = 3;        // Error at '=': Invalid assignment target.
+
+{
+    var a = a;    // Error at 'a': Can't read local variable in its own initializer.
+    var b = 1;
+    var b = 2;    // Error at 'b': Already a variable with this name in this scope.
+}

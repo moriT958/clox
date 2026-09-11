@@ -1,0 +1,22 @@
+var x = "global";
+print x;              // global
+
+{
+    var x = "outer";
+    print x;          // outer
+
+    {
+        var x = "inner";
+        print x;      // inner
+    }
+
+    print x;          // outer
+
+    x = "assigned";
+    print x;          // assigned
+
+    var y = x + "!";
+    print y;          // assigned!
+}
+
+print x;              // global

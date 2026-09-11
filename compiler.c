@@ -127,6 +127,35 @@ static void emitBytes(uint8_t byte1, uint8_t byte2) {
 
 static void emitReturn() { emitByte(OP_RETURN); }
 
+static int emitJump(uint8_t instruction) {
+    emitByte(instruction);
+    emitByte(0xff);
+    emitByte(0xff);
+    return currentChunk()->count - 2;
+}
+
+static void patchJump(int offset) {
+    int jump = currentChunk()->count - offset - 2;
+
+    if (jump > UINT16_MAX) {
+	error("Too much code to jump over.");
+    }
+
+    currentChunk()->code[offset] = (jump >> 8) & 0xff;
+    currentChunk()->code[offset + 1] = jump & 0xff;
+}
+
+static void emitLoop(int loopStart) {
+    emitByte(OP_LOOP);
+
+    int offset = currentChunk()->count - loopStart + 2;
+    if (offset > UINT16_MAX)
+	error("Loop body too large.");
+
+    emitByte((offset >> 8) & 0xff);
+    emitByte(offset & 0xff);
+}
+
 static uint8_t makeConstant(Value value) {
     int constant = addConstant(currentChunk(), value);
     if (constant > UINT8_MAX) {
@@ -142,7 +171,10 @@ static void emitConstant(Value value) {
 }
 
 static void expression();
+static void statement();
 static void declaration();
+static void varDeclaration();
+static void expressionStatement();
 static ParseRule *getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
 static uint8_t identifierConstant(Token *name);
@@ -221,6 +253,29 @@ static void binary(bool canAssign) {
     default:
 	return;
     }
+}
+
+static void and_(bool canAssign) {
+    (void)canAssign;
+    int endJump = emitJump(OP_JUMP_IF_FALSE);
+
+    // 左辺が真のときだけ左辺を捨て、右辺を評価する。
+    emitByte(OP_POP);
+    parsePrecedence(PREC_AND);
+
+    patchJump(endJump);
+}
+
+static void or_(bool canAssign) {
+    (void)canAssign;
+    int elseJump = emitJump(OP_JUMP_IF_FALSE);
+    int endJump = emitJump(OP_JUMP);
+
+    // 左辺が偽のときだけ左辺を捨て、右辺を評価する。
+    patchJump(elseJump);
+    emitByte(OP_POP);
+    parsePrecedence(PREC_OR);
+    patchJump(endJump);
 }
 
 static void literal(bool canAssign) {
@@ -319,7 +374,7 @@ ParseRule rules[] = {
     [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
     [TOKEN_STAR] = {NULL, binary, PREC_FACTOR},
     [TOKEN_BANG] = {unary, NULL, PREC_NONE},
-    [TOKEN_BANG_EQUAL] = {NULL, binary, PREC_NONE},
+    [TOKEN_BANG_EQUAL] = {NULL, binary, PREC_EQUALITY},
     [TOKEN_EQUAL] = {NULL, NULL, PREC_NONE},
     [TOKEN_EQUAL_EQUAL] = {NULL, binary, PREC_EQUALITY},
     [TOKEN_GREATER] = {NULL, binary, PREC_COMPARISON},
@@ -329,7 +384,7 @@ ParseRule rules[] = {
     [TOKEN_IDENTIFIER] = {variable, NULL, PREC_NONE},
     [TOKEN_STRING] = {string, NULL, PREC_NONE},
     [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
-    [TOKEN_AND] = {NULL, NULL, PREC_NONE},
+    [TOKEN_AND] = {NULL, and_, PREC_AND},
     [TOKEN_CLASS] = {NULL, NULL, PREC_NONE},
     [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},
     [TOKEN_FALSE] = {literal, NULL, PREC_NONE},
@@ -337,7 +392,7 @@ ParseRule rules[] = {
     [TOKEN_FUN] = {NULL, NULL, PREC_NONE},
     [TOKEN_IF] = {NULL, NULL, PREC_NONE},
     [TOKEN_NIL] = {literal, NULL, PREC_NONE},
-    [TOKEN_OR] = {NULL, NULL, PREC_NONE},
+    [TOKEN_OR] = {NULL, or_, PREC_OR},
     [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
     [TOKEN_RETURN] = {NULL, NULL, PREC_NONE},
     [TOKEN_SUPER] = {NULL, NULL, PREC_NONE},
@@ -498,6 +553,88 @@ static void printStatement() {
     emitByte(OP_PRINT);
 }
 
+static void ifStatement() {
+    consume(TOKEN_LEFT_PAREN, "Expect '(' after 'if'.");
+    expression();
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+
+    int thenJump = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP);
+    statement();
+
+    int elseJump = emitJump(OP_JUMP);
+
+    patchJump(thenJump);
+    emitByte(OP_POP);
+
+    if (match(TOKEN_ELSE))
+	statement();
+    patchJump(elseJump);
+}
+
+static void whileStatement() {
+    int loopStart = currentChunk()->count;
+
+    consume(TOKEN_LEFT_PAREN, "Expect '(' after 'while'.");
+    expression();
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after condition.");
+
+    int exitJump = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP);
+    statement();
+    emitLoop(loopStart);
+
+    patchJump(exitJump);
+    emitByte(OP_POP);
+}
+
+static void forStatement() {
+    beginScope();
+    consume(TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
+
+    if (match(TOKEN_SEMICOLON)) {
+	// 初期化子なしなので何もしない
+    } else if (match(TOKEN_VAR)) {
+	varDeclaration();
+    } else {
+	expressionStatement();
+    }
+
+    int loopStart = currentChunk()->count;
+    int exitJump = -1;
+    if (!match(TOKEN_SEMICOLON)) {
+	expression();
+	consume(TOKEN_SEMICOLON, "Expect ';' after loop condition.");
+
+	// 条件が偽なら、本体と増分を飛び越えてループを終了する。
+	exitJump = emitJump(OP_JUMP_IF_FALSE);
+	emitByte(OP_POP);
+    }
+
+    if (!match(TOKEN_RIGHT_PAREN)) {
+	// 初回は本体へ進み、以降は増分から条件へ戻る。
+	int bodyJump = emitJump(OP_JUMP);
+	int incrementStart = currentChunk()->count;
+	expression();
+	emitByte(OP_POP);
+	consume(TOKEN_RIGHT_PAREN, "Expect ')' after for clauses.");
+
+	emitLoop(loopStart);
+	loopStart = incrementStart;
+	patchJump(bodyJump);
+    }
+
+    statement();
+	emitLoop(loopStart);
+
+    if (exitJump != -1) {
+	patchJump(exitJump);
+	emitByte(OP_POP);
+    }
+
+    endScope();
+}
+
 static void expressionStatement() {
     expression();
     consume(TOKEN_SEMICOLON, "Expect ';' after expression.");
@@ -507,6 +644,12 @@ static void expressionStatement() {
 static void statement() {
     if (match(TOKEN_PRINT)) {
 	printStatement();
+    } else if (match(TOKEN_IF)) {
+	ifStatement();
+    } else if (match(TOKEN_WHILE)) {
+	whileStatement();
+	} else if (match(TOKEN_FOR)) {
+	forStatement();
     } else if (match(TOKEN_LEFT_BRACE)) {
 	beginScope();
 	block();
