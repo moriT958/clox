@@ -12,8 +12,17 @@
 #include <string.h>
 
 #include "compiler.h"
+#include <time.h>
 
 VM vm;
+
+static Value clockNative(int argCount, Value *args) {
+    (void)argCount;
+    (void)args;
+    return NUMBER_VAL((double)clock() / CLOCKS_PER_SEC);
+}
+
+static void defineNative(const char *name, NativeFn function);
 
 static void resetStack() {
     vm.stackTop = vm.stack;
@@ -40,6 +49,8 @@ void initVM() {
     vm.objects = NULL;
     initTable(&vm.strings);
     initTable(&vm.globals);
+
+    defineNative("clock", clockNative);
 }
 
 void freeVM() {
@@ -59,6 +70,19 @@ static Value pop() {
 }
 
 static Value peek(int distance) { return vm.stackTop[-1 - distance]; }
+
+static void defineNative(const char *name, NativeFn function) {
+    // GC がヒープ確保直後のオブジェクトを回収してしまわないよう一旦スタックに積んでから登録する。
+    // 後に追加予定の GC は mark-sweep 方式を採用するため、 生存ヒープ以外を Sweep 対象とする。
+    // VM の値スタックは使用中の値のため、必ず Mark されるので Sweep 対象にならない。
+    // Sweep されるのは参照されずにヒープに残ったオブジェクトのみなので、
+    // stack に push したネイティブ関数は Mark される (Sweep されない)
+    push(OBJ_VAL(copyString(name, (int)strlen(name))));
+    push(OBJ_VAL(newNative(function)));
+    tableSet(&vm.globals, AS_STRING(vm.stack[0]), vm.stack[1]);
+    pop();
+    pop();
+}
 
 static bool isFalsey(Value value) {
     return IS_NIL(value) || (IS_BOOL(value) && !AS_BOOL(value));
@@ -88,6 +112,13 @@ static bool callValue(Value callee, int argCount) {
 	switch (OBJ_TYPE(callee)) {
 	case OBJ_FUNCTION:
 	    return call(AS_FUNCTION(callee), argCount);
+	case OBJ_NATIVE: {
+	    NativeFn native = AS_NATIVE(callee);
+	    Value result = native(argCount, vm.stackTop - argCount);
+	    vm.stackTop -= argCount + 1;
+	    push(result);
+	    return true;
+	}
 	default:
 	    break;
 	}
