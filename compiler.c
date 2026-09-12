@@ -149,7 +149,11 @@ static void emitBytes(uint8_t byte1, uint8_t byte2) {
     emitByte(byte2);
 }
 
-static void emitReturn() { emitByte(OP_RETURN); }
+static void emitReturn() {
+    // 暗黙の戻り値として nil を積んでおく (return を書かなかった場合の)
+    emitByte(OP_NIL);
+    emitByte(OP_RETURN);
+}
 
 static int emitJump(uint8_t instruction) {
     emitByte(instruction);
@@ -697,9 +701,25 @@ static void expressionStatement() {
     emitByte(OP_POP);
 }
 
+static void returnStatement() {
+    if (current->type == TYPE_SCRIPT) {
+	error("Can't return from top-level code.");
+    }
+
+    if (match(TOKEN_SEMICOLON)) {
+	emitReturn();
+    } else {
+	expression();
+	consume(TOKEN_SEMICOLON, "Expect ';' after return value.");
+	emitByte(OP_RETURN);
+    }
+}
+
 static void statement() {
     if (match(TOKEN_PRINT)) {
 	printStatement();
+    } else if (match(TOKEN_RETURN)) {
+	returnStatement();
     } else if (match(TOKEN_IF)) {
 	ifStatement();
     } else if (match(TOKEN_WHILE)) {
