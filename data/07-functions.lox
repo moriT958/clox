@@ -1,0 +1,39 @@
+fun add(a, b) {
+    return a + b;
+}
+print add(1, 2); // 3
+
+// return を書かなければ nil が返る。
+fun noReturn(a, b) {
+    print a + b; // 3
+}
+print noReturn(1, 2); // nil
+
+// 関数は自分自身を再帰的に呼び出せる。
+fun fib(n) {
+    if (n < 2) return n;
+    return fib(n - 1) + fib(n - 2);
+}
+print fib(10); // 55
+
+// 関数は入れ子で呼び出せる。呼び出しごとにローカル変数は独立している。
+fun c(x) {
+    print x + 100; // 112
+}
+fun b(x) {
+    c(x + 10);
+    print x; // 2
+}
+fun a(x) {
+    b(x + 1);
+    print x; // 1
+}
+a(1);
+
+// clock() はネイティブ関数
+var start = clock();
+var i = 0;
+while (i < 1000) {
+    i = i + 1;
+}
+print clock() >= start; // true
