@@ -203,6 +203,7 @@ static ParseRule *getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
 static uint8_t identifierConstant(Token *name);
 static int resolveLocal(Compiler *compiler, Token *name);
+static bool check(TokenType type);
 static bool match(TokenType type);
 
 static void parsePrecedence(Precedence precedence) {
@@ -373,6 +374,27 @@ static void variable(bool canAssign) {
     namedVariable(parser.previous, canAssign);
 }
 
+static uint8_t argumentList() {
+    uint8_t argCount = 0;
+    if (!check(TOKEN_RIGHT_PAREN)) {
+	do {
+	    expression();
+	    if (argCount == 255) {
+		error("Can't have more than 255 arguments.");
+	    }
+	    argCount++;
+	} while (match(TOKEN_COMMA));
+    }
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+    return argCount;
+}
+
+static void call(bool canAssign) {
+    (void)canAssign;
+    uint8_t argCount = argumentList();
+    emitBytes(OP_CALL, argCount);
+}
+
 static void unary(bool canAssign) {
     (void)canAssign;
     TokenType operatorType = parser.previous.type;
@@ -393,7 +415,7 @@ static void unary(bool canAssign) {
 
 ParseRule rules[] = {
     // {prefixFn, infixFn, precedence}
-    [TOKEN_LEFT_PAREN] = {grouping, NULL, PREC_NONE},
+    [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL},
     [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
     [TOKEN_LEFT_BRACE] = {NULL, NULL, PREC_NONE},
     [TOKEN_RIGHT_BRACE] = {NULL, NULL, PREC_NONE},
