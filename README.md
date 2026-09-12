@@ -1,1 +1,1 @@
-Implementation of lox-lang interpreter.
+Lox 言語の実装
