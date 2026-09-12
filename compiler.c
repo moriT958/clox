@@ -772,7 +772,7 @@ static void function(FunctionType type) {
     // 関数本体の実行時にはこの Compiler ごとフレームが破棄されるため、
     // ここで endScope() によるローカル変数の OP_POP は不要。
     ObjFunction *function = endCompiler();
-    emitConstant(OBJ_VAL(function));
+    emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(function)));
 }
 
 static void funDeclaration() {
