@@ -28,7 +28,20 @@ typedef struct {
 typedef struct {
     Token name;
     int depth;
+    // 内側の関数から上位値として捕捉されているかどうか。
+    // true の場合、スコープを抜けるときに OP_POP ではなく
+    // OP_CLOSE_UPVALUE を発行して値をヒープへ退避させる必要がある。
+    bool isCaptured;
 } Local;
+
+typedef struct {
+    // 親コンパイラの locals 配列内での index、
+    // もしくは親コンパイラの upvalues 配列内での index。
+    uint8_t index;
+    // true: 親関数自身のローカル変数を指す。
+    // false: さらに外側の関数の上位値を指す。
+    bool isLocal;
+} Upvalue;
 
 typedef enum {
     TYPE_FUNCTION,
@@ -42,6 +55,7 @@ typedef struct Compiler {
 
     Local locals[UINT8_COUNT];
     int localCount;
+    Upvalue upvalues[UINT8_COUNT];
     int scopeDepth;
 } Compiler;
 
@@ -90,6 +104,7 @@ static void initCompiler(Compiler *compiler, FunctionType type) {
     // 空の名前にすることで、Lox のコードからは参照できないようにする。
     Local *local = &current->locals[current->localCount++];
     local->depth = 0;
+    local->isCaptured = false;
     local->name.start = "";
     local->name.length = 0;
 }
@@ -207,6 +222,7 @@ static ParseRule *getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
 static uint8_t identifierConstant(Token *name);
 static int resolveLocal(Compiler *compiler, Token *name);
+static int resolveUpvalue(Compiler *compiler, Token *name);
 static bool check(TokenType type);
 static bool match(TokenType type);
 
@@ -359,6 +375,11 @@ static void namedVariable(Token name, bool canAssign) {
 	// ローカル変数はスタックスロット番号で参照する。
 	getOp = OP_GET_LOCAL;
 	setOp = OP_SET_LOCAL;
+    } else if ((arg = resolveUpvalue(current, &name)) != -1) {
+	// 自分のローカルでもなく、外側の関数のローカル (または上位値) なら
+	// 上位値テーブルの index で参照する。
+	getOp = OP_GET_UPVALUE;
+	setOp = OP_SET_UPVALUE;
     } else {
 	// 見つからなければグローバル変数として名前で参照する。
 	arg = identifierConstant(&name);
@@ -521,6 +542,51 @@ static int resolveLocal(Compiler *compiler, Token *name) {
     return -1;
 }
 
+static int addUpvalue(Compiler *compiler, uint8_t index, bool isLocal) {
+    int upvalueCount = compiler->function->upvalueCount;
+
+    // 同じ変数を複数回捕捉する場合は、既存のエントリを使い回す。
+    for (int i = 0; i < upvalueCount; i++) {
+	Upvalue *upvalue = &compiler->upvalues[i];
+	if (upvalue->index == index && upvalue->isLocal == isLocal) {
+	    return i;
+	}
+    }
+
+    if (upvalueCount == UINT8_COUNT) {
+	error("Too many closure variables in function.");
+	return 0;
+    }
+
+    compiler->upvalues[upvalueCount].isLocal = isLocal;
+    compiler->upvalues[upvalueCount].index = index;
+    return compiler->function->upvalueCount++;
+}
+
+static int resolveUpvalue(Compiler *compiler, Token *name) {
+    // トップレベルスクリプトには外側の関数が存在しない。
+    if (compiler->enclosing == NULL)
+	return -1;
+
+    // 1 つ外側の関数自身のローカル変数として見つかった場合。
+    int local = resolveLocal(compiler->enclosing, name);
+    if (local != -1) {
+	// このローカル変数はスコープを抜けるとき OP_POP ではなく
+	// OP_CLOSE_UPVALUE で値を退避させる必要があるため印を付ける。
+	compiler->enclosing->locals[local].isCaptured = true;
+	return addUpvalue(compiler, (uint8_t)local, true);
+    }
+
+    // 1 つ外側の関数でも見つからない場合は、
+    // さらにその外側を再帰的に辿る (2 段以上ネストした関数への対応)。
+    int upvalue = resolveUpvalue(compiler->enclosing, name);
+    if (upvalue != -1) {
+	return addUpvalue(compiler, (uint8_t)upvalue, false);
+    }
+
+    return -1;
+}
+
 static void addLocal(Token name) {
     if (current->localCount == UINT8_COUNT) {
 	error("Too many local variables in function.");
@@ -531,6 +597,7 @@ static void addLocal(Token name) {
     local->name = name;
     // 初期化式のコンパイル中は未初期化として扱い、自分自身の参照を検出する。
     local->depth = UNINITIALIZED_DEPTH;
+    local->isCaptured = false;
 }
 
 static void markInitialized() {
@@ -594,7 +661,14 @@ static void endScope() {
     while (current->localCount > 0 &&
            current->locals[current->localCount - 1].depth >
                current->scopeDepth) {
-	emitByte(OP_POP);
+	// 内側の関数から上位値として捕捉されている変数は、
+	// スタックから消える前に OP_CLOSE_UPVALUE で値をヒープへ退避させる。
+	// そうでなければ、単にスタックから捨てるだけで良い。
+	if (current->locals[current->localCount - 1].isCaptured) {
+	    emitByte(OP_CLOSE_UPVALUE);
+	} else {
+	    emitByte(OP_POP);
+	}
 	current->localCount--;
     }
 }
@@ -773,6 +847,13 @@ static void function(FunctionType type) {
     // ここで endScope() によるローカル変数の OP_POP は不要。
     ObjFunction *function = endCompiler();
     emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(function)));
+
+    // このクロージャが捕捉する各上位値について、
+    // 「親関数自身のローカルか (isLocal)」「その index」の 2 バイト組を続けて埋め込む。
+    for (int i = 0; i < function->upvalueCount; i++) {
+	emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
+	emitByte(compiler.upvalues[i].index);
+    }
 }
 
 static void funDeclaration() {

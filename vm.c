@@ -47,6 +47,7 @@ static void runtimeError(const char *format, ...) {
 void initVM() {
     resetStack();
     vm.objects = NULL;
+    vm.openUpvalues = NULL;
     initTable(&vm.strings);
     initTable(&vm.globals);
 
@@ -126,6 +127,44 @@ static bool callValue(Value callee, int argCount) {
 
     runtimeError("Can only call functions and classes.");
     return false;
+}
+
+static ObjUpvalue *captureUpvalue(Value *local) {
+    // openUpvalues はスタックアドレスの降順 (深い方が先頭) に並んでいる。
+    // local と同じアドレスを指す既存の上位値があれば使い回し、
+    // 無ければ挿入位置 (prevUpvalue と upvalue の間) を特定して新規作成する。
+    ObjUpvalue *prevUpvalue = NULL;
+    ObjUpvalue *upvalue = vm.openUpvalues;
+    while (upvalue != NULL && upvalue->location > local) {
+	prevUpvalue = upvalue;
+	upvalue = upvalue->next;
+    }
+
+    if (upvalue != NULL && upvalue->location == local) {
+	return upvalue;
+    }
+
+    ObjUpvalue *createdUpvalue = newUpvalue(local);
+    createdUpvalue->next = upvalue;
+
+    if (prevUpvalue == NULL) {
+	vm.openUpvalues = createdUpvalue;
+    } else {
+	prevUpvalue->next = createdUpvalue;
+    }
+
+    return createdUpvalue;
+}
+
+static void closeUpvalues(Value *last) {
+    // last 以降 (last を含む、スタックの浅い方向すべて) のスタックアドレスを
+    // 指している開いた上位値を、値をコピーして閉じる。
+    while (vm.openUpvalues != NULL && vm.openUpvalues->location >= last) {
+	ObjUpvalue *upvalue = vm.openUpvalues;
+	upvalue->closed = *upvalue->location;
+	upvalue->location = &upvalue->closed;
+	vm.openUpvalues = upvalue->next;
+    }
 }
 
 static void concatenate() {
@@ -295,6 +334,19 @@ static InterpretResult run() {
 	    break;
 	}
 
+	case OP_GET_UPVALUE: {
+	    uint8_t slot = READ_BYTE();
+	    push(*frame->closure->upvalues[slot]->location);
+	    break;
+	}
+
+	case OP_SET_UPVALUE: {
+	    uint8_t slot = READ_BYTE();
+	    // 代入式の値は式の結果として残すため pop しない (OP_SET_LOCAL と同様)。
+	    *frame->closure->upvalues[slot]->location = peek(0);
+	    break;
+	}
+
 	case OP_JUMP_IF_FALSE: {
 	    uint16_t offset = READ_SHORT();
 	    if (isFalsey(peek(0)))
@@ -329,11 +381,39 @@ static InterpretResult run() {
 	    ObjFunction *function = AS_FUNCTION(READ_CONSTANT());
 	    ObjClosure *closure = newClosure(function);
 	    push(OBJ_VAL(closure));
+
+	    // コンパイラが OP_CLOSURE の後ろに埋め込んだ上位値テーブルを読み、
+	    // 実際に捕捉する。
+	    for (int i = 0; i < closure->upvalueCount; i++) {
+		uint8_t isLocal = READ_BYTE();
+		uint8_t index = READ_BYTE();
+		if (isLocal) {
+		    // 現在実行中の関数 (親) 自身のローカル変数を捕捉する。
+		    closure->upvalues[i] = captureUpvalue(frame->slots + index);
+		} else {
+		    // 親関数がすでに捕捉済みの上位値をそのまま共有する
+		    // (2 段以上ネストした関数からの参照を同じ実体に束ねる)。
+		    closure->upvalues[i] = frame->closure->upvalues[index];
+		}
+	    }
+	    break;
+	}
+
+	case OP_CLOSE_UPVALUE: {
+	    // スタック最上段の変数がスコープを抜ける。
+	    // (endScope() が捕捉済みのローカル変数に対して発行する)
+	    closeUpvalues(vm.stackTop - 1);
+	    pop();
 	    break;
 	}
 
 	case OP_RETURN: {
 	    Value result = pop();
+
+	    // 関数自身のパラメータ・ローカルはスコープの OP_POP/OP_CLOSE_UPVALUE を
+	    // 経由せずにフレームごと丸ごと破棄されるため、ここで明示的に閉じる。
+	    closeUpvalues(frame->slots);
+
 	    vm.frameCount--;
 	    if (vm.frameCount == 0) {
 		// トップレベルスクリプト自身が終了した。

@@ -23,6 +23,7 @@ typedef enum {
     OBJ_FUNCTION,
     OBJ_NATIVE,
     OBJ_STRING,
+    OBJ_UPVALUE,
 } ObjType;
 
 struct Obj {
@@ -33,13 +34,27 @@ struct Obj {
 typedef struct {
     Obj obj;
     int arity;
+    int upvalueCount;
     Chunk chunk;
     ObjString *name;
 } ObjFunction;
 
+typedef struct ObjUpvalue {
+    Obj obj;
+    // 「開いている」間はスタック上のアドレスを直接指す。
+    // 「閉じた」後は自分自身が持つ closed フィールドを指すよう付け替えられる。
+    Value *location;
+    // 閉じたときに、スタックから退避した値の実体を保持する。
+    Value closed;
+    // VM 全体で「開いている上位値」を 1 本の連結リストとして繋ぐ。
+    struct ObjUpvalue *next;
+} ObjUpvalue;
+
 typedef struct {
     Obj obj;
     ObjFunction *function;
+    ObjUpvalue **upvalues;
+    int upvalueCount;
 } ObjClosure;
 
 typedef Value (*NativeFn)(int argCount, Value *args);
@@ -59,6 +74,7 @@ struct ObjString {
 ObjClosure *newClosure(ObjFunction *function);
 ObjFunction *newFunction();
 ObjNative *newNative(NativeFn function);
+ObjUpvalue *newUpvalue(Value *slot);
 ObjString *takeString(char *chars, int length);
 ObjString *copyString(const char *chars, int length);
 void printObject(Value value);

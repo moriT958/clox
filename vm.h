@@ -22,6 +22,9 @@ typedef struct {
     Value stack[STACK_MAX];
     Value *stackTop;
     Obj *objects;
+    // まだ閉じられていない (スタック上の実アドレスを指している) 上位値を、
+    // スタックアドレスの降順で繋いだ連結リスト。
+    ObjUpvalue *openUpvalues;
     Table strings;
     Table globals;
 } VM;
