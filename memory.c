@@ -21,6 +21,16 @@ void *reallocate(void *pointer, size_t oldSize, size_t newSize) {
 
 static void freeObject(Obj *object) {
     switch (object->type) {
+    case OBJ_CLOSURE: {
+	// ObjFunction は複数の ObjClosure から共有され得るため解放しない。
+	// upvalues 配列 (ポインタの配列) 自体は closure が所有するので解放するが、
+	// 配列が指す各 ObjUpvalue は他の closure とも共有され得るため
+	// ここでは解放しない (それぞれ独立した Obj として GC 対象になる)。
+	ObjClosure *closure = (ObjClosure *)object;
+	FREE_ARRAY(ObjUpvalue *, closure->upvalues, closure->upvalueCount);
+	FREE(ObjClosure, object);
+	break;
+    }
     case OBJ_FUNCTION: {
 	ObjFunction *function = (ObjFunction *)object;
 	freeChunk(&function->chunk);
@@ -36,6 +46,10 @@ static void freeObject(Obj *object) {
 	FREE(ObjString, object);
 	break;
     }
+    case OBJ_UPVALUE:
+	// location はスタック上のアドレスを指すだけで所有していないため解放しない。
+	FREE(ObjUpvalue, object);
+	break;
     }
 }
 

@@ -1,0 +1,44 @@
+fun makeCounter() {
+    var i = 0;
+    fun count() {
+        i = i + 1;
+        print i;
+    }
+    return count;
+}
+
+var counterA = makeCounter();
+var counterB = makeCounter();
+counterA(); // 1
+counterA(); // 2
+counterA(); // 3
+counterB(); // 1
+
+fun outer() {
+    var x = "outside";
+    fun middle() {
+        fun inner() {
+            print x; // outside
+        }
+        inner();
+    }
+    middle();
+}
+outer();
+
+// 複数の内側関数が同じ外側の変数を共有する。
+fun makePair() {
+    var value = 0;
+
+    fun get() {
+        return value;
+    }
+    fun set(v) {
+        value = v;
+    }
+
+    print get(); // 0
+    set(10);
+    print get(); // 10
+}
+makePair();
